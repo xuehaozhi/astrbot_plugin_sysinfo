@@ -1,0 +1,9 @@
+name: astrbot_plugin_sysinfo
+display_name: 系统状态
+desc: 读取服务器实时运行状态并输出：CPU 总使用率、每个核心使用率、内存占用、磁盘存储、网络流量、负载与温度等。
+short_desc: 一键查看服务器 CPU / 核心 / 内存 / 存储实时状态
+version: v1.2.0
+author: xuehaozhi
+repo: https://github.com/xuehaozhi/astrbot_plugin_sysinfo
+support_platforms: []
+astrbot_version: ">=3.5.0"

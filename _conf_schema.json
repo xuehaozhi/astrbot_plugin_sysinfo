@@ -1,0 +1,85 @@
+{
+    "report_style": {
+        "description": "报告风格",
+        "type": "string",
+        "options": ["detailed", "concise"],
+        "default": "detailed",
+        "hint": "detailed=带进度条的完整报告；concise=精简的列表格式，与示例一致"
+    },
+    "sample_interval": {
+        "description": "CPU 采样时长（秒）",
+        "type": "float",
+        "default": 1.0,
+        "hint": "值越大读数越稳定，但响应越慢。设为 0 表示取瞬时值"
+    },
+    "show_per_core": {
+        "description": "显示每个 CPU 核心的使用率",
+        "type": "bool",
+        "default": true
+    },
+    "max_cores": {
+        "description": "最多显示多少个核心",
+        "type": "int",
+        "default": 0,
+        "hint": "0 表示不限制；核心数很多的机器建议设为 8~16，避免刷屏"
+    },
+    "show_disk": {
+        "description": "显示存储占用",
+        "type": "bool",
+        "default": true
+    },
+    "disk_paths": {
+        "description": "要监控的磁盘挂载点列表",
+        "type": "list",
+        "items": { "type": "string" },
+        "default": [],
+        "hint": "留空则自动检测。Linux 填 /，Windows 填 C:\\"
+    },
+    "max_disks": {
+        "description": "最多显示多少个磁盘分区",
+        "type": "int",
+        "default": 3
+    },
+    "show_net": {
+        "description": "显示网络累计流量",
+        "type": "bool",
+        "default": true
+    },
+    "show_temp": {
+        "description": "显示温度（需要硬件/系统支持，多数 Linux 可用）",
+        "type": "bool",
+        "default": true
+    },
+    "max_temp_entries": {
+        "description": "最多显示多少条温度数据",
+        "type": "int",
+        "default": 3
+    },
+    "show_top_process": {
+        "description": "显示内存占用 Top 进程",
+        "type": "bool",
+        "default": false
+    },
+    "top_process_n": {
+        "description": "Top 进程数量",
+        "type": "int",
+        "default": 5
+    },
+    "render_image": {
+        "description": "以图片卡片形式输出",
+        "type": "bool",
+        "default": false,
+        "hint": "需要安装 Pillow（已在 requirements.txt 中）。渲染失败会自动回退为文本"
+    },
+    "font_path": {
+        "description": "自定义字体文件路径（可选）",
+        "type": "string",
+        "default": "",
+        "hint": "仅用于图片模式。留空则自动探测系统字体；容器里若中文显示为方框，可填中文字体路径，例如 /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
+    },
+    "admin_only": {
+        "description": "仅允许管理员查询",
+        "type": "bool",
+        "default": false
+    }
+}
