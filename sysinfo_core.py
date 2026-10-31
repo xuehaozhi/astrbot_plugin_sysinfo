@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import platform
+import re
 import socket
 import time
 from datetime import datetime
@@ -22,7 +23,7 @@ BAR_WIDTH = 10
 _SIZE_UNITS = ("B", "KB", "MB", "GB", "TB", "PB")
 
 # 插件版本号，与 metadata.yaml 的 version 保持一致
-PLUGIN_VERSION = "v1.3.0"
+PLUGIN_VERSION = "v1.4.0"
 
 
 def detect_astrbot_version() -> str:
@@ -874,6 +875,135 @@ def render_report_image(options: dict[str, Any] | None = None, save_path: str | 
     os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
     img.save(save_path, format="PNG")
     return save_path
+
+
+# --------------------------------------------------------------------------
+# 上下文占用统计（/context 指令）
+# --------------------------------------------------------------------------
+# 与 AstrBot 内置 EstimateTokenCounter 保持同一套估算系数，
+# 否则插件报的数字会和宿主的上下文压缩触发点对不上。
+_EMOJI_RE = re.compile("[\u200d\u2600-\u27bf\ufe00-\ufe0f\U0001f000-\U0001faff]")
+_TOKEN_RATE_CJK = 0.6
+_TOKEN_RATE_EMOJI = 2.0
+_TOKEN_RATE_OTHER = 0.3
+
+
+def estimate_tokens(text: str) -> int:
+    """按字符类型估算 token 数（中文 0.6、emoji 2.0、其他 0.3）。"""
+    if not text:
+        return 0
+    cjk = sum(1 for c in text if "\u4e00" <= c <= "\u9fff")
+    emoji = len(_EMOJI_RE.findall(text))
+    other = len(text) - cjk - emoji
+    return int(cjk * _TOKEN_RATE_CJK + emoji * _TOKEN_RATE_EMOJI + other * _TOKEN_RATE_OTHER)
+
+
+def message_text(content: Any) -> str:
+    """把 OpenAI 格式的 content 取出纯文本（兼容 str 与分段列表）。"""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, dict):
+                # {"type": "text", "text": "..."} / 兼容其他分段结构
+                for key in ("text", "content", "think"):
+                    value = part.get(key)
+                    if isinstance(value, str):
+                        parts.append(value)
+                        break
+        return "".join(parts)
+    if isinstance(content, dict):
+        return message_text([content])
+    return ""
+
+
+def summarize_history(history: Any) -> dict[str, int]:
+    """统计对话历史的消息数、字符数，以及按角色区分的估算 token。
+
+    user/system/tool 归入“输入”，assistant 归入“输出”，
+    与 AstrBot 内置 /stats 的输入/输出口径一致。
+    """
+    msgs = 0
+    chars = 0
+    est_input = 0
+    est_output = 0
+    for item in history or []:
+        if not isinstance(item, dict):
+            continue
+        text = message_text(item.get("content"))
+        role = str(item.get("role") or "").lower()
+        msgs += 1
+        chars += len(text)
+        tokens = estimate_tokens(text)
+        if role == "assistant":
+            est_output += tokens
+        else:
+            est_input += tokens
+    return {
+        "messages": msgs,
+        "chars": chars,
+        "est_input": est_input,
+        "est_output": est_output,
+        "est_total": est_input + est_output,
+    }
+
+
+def format_context_report(info: dict[str, Any]) -> str:
+    """渲染 /context 的四行报告。
+
+    info 字段：
+      model          模型 ID
+      provider_id    Provider ID（可选，仅内部展示）
+      messages/chars 历史消息数与字符数
+      input_tokens/output_tokens  输入/输出 token（来自 AstrBot 统计或估算）
+      used_tokens    当前上下文已占用 token
+      window_tokens  模型上下文窗口大小
+      estimated      token 是否为估算值（用于给数字加 ~ 前缀）
+      source         统计来源说明
+    """
+
+    def num(value: Any) -> str:
+        try:
+            return f"{int(value):,}"
+        except (TypeError, ValueError):
+            return NA
+
+    model = str(info.get("model") or NA)
+    estimated = bool(info.get("estimated"))
+
+    def mark(value: Any) -> str:
+        """估算值加 ~ 前缀提示，0 不加（避免出现 ~0 这种噪音）。"""
+        try:
+            return "~" if estimated and int(value) > 0 else ""
+        except (TypeError, ValueError):
+            return ""
+
+    messages = info.get("messages")
+    chars = info.get("chars")
+    input_tokens = info.get("input_tokens")
+    output_tokens = info.get("output_tokens")
+    used = info.get("used_tokens")
+    window = info.get("window_tokens")
+
+    if used is None or window is None:
+        free = None
+    else:
+        free = max(0, int(window) - int(used))
+
+    lines = [
+        f"模型：{model}",
+        f"消息/字符：{num(messages)} / {num(chars)}",
+        f"token使用(输入/输出)：{mark(input_tokens)}{num(input_tokens)} / {mark(output_tokens)}{num(output_tokens)}",
+        (
+            f"上下文空间(使用空间/未使用空间)：{mark(used)}{num(used)} / {num(free)}"
+            if free is not None
+            else f"上下文空间(使用空间/未使用空间)：{NA} / {NA}"
+        ),
+    ]
+    return "\n".join(lines)
 
 
 if __name__ == "__main__":

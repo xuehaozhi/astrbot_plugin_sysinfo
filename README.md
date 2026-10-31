@@ -56,6 +56,7 @@ pip install -r data/plugins/astrbot_plugin_sysinfo/requirements.txt
 | `/status` | 别名 |
 | `/系统状态` | 别名 |
 | `/服务器状态` | 别名 |
+| `/context` | 查看当前模型的上下文使用情况（详见第 3 节） |
 
 ### LLM 工具
 
@@ -95,6 +96,42 @@ RAM           47.0%  █████░░░░░  7.46 GB / 15.87 GB
 
 图片卡片底部会显示 `SysInfo <插件版本> · AstrBot <AstrBot 版本>`，方便排查"到底跑的是哪一版"。
 AstrBot 版本取不到时该段自动省略，不会显示 `unknown`。
+
+### `/context` 上下文占用
+
+```
+模型：deepseek-chat
+消息/字符：24 / 3,182
+token使用(输入/输出)：36,000 / 9,000
+上下文空间(使用空间/未使用空间)：32,000 / 96,000
+```
+
+四行含义：
+
+| 行 | 含义 |
+| --- | --- |
+| `模型` | 当前会话实际使用的模型 ID（`provider.get_model()`） |
+| `消息/字符` | 本对话历史里的消息条数与总字符数 |
+| `token使用(输入/输出)` | **最近一次请求**的 token：输入 = prompt（含缓存命中部分），输出 = 模型生成 |
+| `上下文空间(使用空间/未使用空间)` | 以模型上下文窗口为分母；使用空间恒等于「输入 + 输出」，未使用空间 = 窗口 − 使用空间 |
+
+这里刻意用**最近一次请求**而不是累计值：`/context` 回答的是"现在这个上下文占了多少"，
+累计消耗是另一个问题，AstrBot 内置的 `/stats` 已经覆盖。因此「使用空间 = 输入 + 输出」
+恒成立，用户可以自己拿这两个数验算。
+
+**数字来源分两种，用 `~` 区分：**
+
+- 不带 `~`：直接读 AstrBot `provider_stats` 表最近一条记录（与内置 `/stats` 同源，真实值）。
+- 带 `~`：读不到统计表时的估算值，按 AstrBot 内置 `EstimateTokenCounter` 的同一套系数计算（中文 0.6、emoji 2.0、其他 0.3），保证和宿主的压缩触发点口径一致。
+
+**上下文窗口大小的解析顺序**与 AstrBot 内部保持一致：
+
+1. Provider 配置里的 `max_context_tokens`（非 0 时）
+2. 模型元数据 `LLM_METADATAS[model]["limit"]["context"]`（来自 models.dev）
+3. 配置项 `provider_settings.agent_runner.config.compression.fallback_max_tokens`，默认 128000
+
+几个已知边界：还没有对话时四项都是 0；AstrBot 版本过老、没有 `provider_stats` 表时自动退回估算；
+取不到当前 Provider 时窗口显示 `N/A`（不猜）；`admin_only` 打开时该指令同样仅管理员可用。
 
 ---
 
