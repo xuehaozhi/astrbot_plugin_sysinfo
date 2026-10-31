@@ -45,6 +45,12 @@
         "type": "bool",
         "default": true
     },
+    "show_net_speed": {
+        "description": "显示网络实时速率",
+        "type": "bool",
+        "default": true,
+        "hint": "上下行速率由采样窗口内的流量差计算，会复用 CPU 采样的等待时间，不额外增加耗时"
+    },
     "show_temp": {
         "description": "显示温度（需要硬件/系统支持，多数 Linux 可用）",
         "type": "bool",

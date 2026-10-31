@@ -21,6 +21,51 @@ NA = "N/A"
 BAR_WIDTH = 10
 _SIZE_UNITS = ("B", "KB", "MB", "GB", "TB", "PB")
 
+# 插件版本号，与 metadata.yaml 的 version 保持一致
+PLUGIN_VERSION = "v1.3.0"
+
+
+def detect_astrbot_version() -> str:
+    """探测当前运行的 AstrBot 版本号。
+
+    AstrBot 没有稳定的公开版本常量，因此按可靠性依次尝试：
+    1. 包元数据（pip/官方镜像安装，最准）
+    2. astrbot.core.version 里的 __version__ / VERSION
+    3. astrbot 包自身的 __version__
+    全都取不到时返回 "unknown"，不抛异常。
+    """
+    try:
+        from importlib.metadata import version as _pkg_version
+
+        return str(_pkg_version("astrbot")).strip() or "unknown"
+    except Exception:
+        pass
+
+    for mod_name, attrs in (
+        ("astrbot", ("__version__", "VERSION")),
+        ("astrbot.core.config.default", ("VERSION",)),
+        ("astrbot.core.version", ("__version__", "VERSION", "version")),
+    ):
+        try:
+            mod = __import__(mod_name, fromlist=["*"])
+        except Exception:
+            continue
+        for attr in attrs:
+            value = getattr(mod, attr, None)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return "unknown"
+
+
+_ASTRBOT_VERSION_CACHE: list[str] = []
+
+
+def _astrbot_version_cached() -> str:
+    """带缓存的版本探测，避免每次采集都重复 import 查找。"""
+    if not _ASTRBOT_VERSION_CACHE:
+        _ASTRBOT_VERSION_CACHE.append(detect_astrbot_version())
+    return _ASTRBOT_VERSION_CACHE[0]
+
 
 # --------------------------------------------------------------------------
 # 基础工具
@@ -93,23 +138,40 @@ def _uptime_str(boot_ts: float, en: bool = False) -> str:
 # --------------------------------------------------------------------------
 # 采集
 # --------------------------------------------------------------------------
-def _sample_cpu(interval: float) -> tuple[float | None, list[float]]:
-    """采样 CPU 使用率。
+def _sample(interval: float, with_net_speed: bool = True) -> dict[str, Any]:
+    """一次性采样 CPU 与网络速率。
 
-    psutil.cpu_percent 是“两次调用之间的差值”，所以先各调用一次建立基准，
-    睡眠 interval 后再取值，得到的是该窗口内的平均使用率。
+    psutil 的 CPU 使用率是“两次调用之间的差值”，所以先各调用一次建立基准，
+    睡眠 interval 后再取值。网络速率同样需要前后两次读数相减——
+    这里共用同一次 sleep，不会因为多了网速统计就双倍等待。
     """
+    out: dict[str, Any] = {
+        "cpu_total": None,
+        "per_core": [],
+        "up_speed": None,
+        "down_speed": None,
+        "window": None,
+    }
     if psutil is None:
-        return None, []
+        return out
     try:
         psutil.cpu_percent(interval=None)
         psutil.cpu_percent(interval=None, percpu=True)
+        c1 = psutil.net_io_counters() if with_net_speed else None
+        t1 = time.time()
         time.sleep(max(0.0, interval))
-        total = psutil.cpu_percent(interval=None)
-        per_core = psutil.cpu_percent(interval=None, percpu=True)
-        return total, list(per_core)
+        c2 = psutil.net_io_counters() if with_net_speed else None
+        t2 = time.time()
+        out["cpu_total"] = psutil.cpu_percent(interval=None)
+        out["per_core"] = list(psutil.cpu_percent(interval=None, percpu=True))
+        if c1 and c2:
+            window = max(t2 - t1, 1e-6)
+            out["up_speed"] = max(0.0, (c2.bytes_sent - c1.bytes_sent) / window)
+            out["down_speed"] = max(0.0, (c2.bytes_recv - c1.bytes_recv) / window)
+            out["window"] = window
     except Exception:
-        return None, []
+        pass
+    return out
 
 
 # 伪文件系统：这些不是真实磁盘，占满了视图也毫无意义
@@ -196,6 +258,7 @@ def collect(options: dict[str, Any] | None = None) -> dict[str, Any]:
     show_net = bool(opt.get("show_net", True))
     show_temp = bool(opt.get("show_temp", True))
     show_top_proc = bool(opt.get("show_top_process", False))
+    show_net_speed = bool(opt.get("show_net_speed", True))
     max_disks = int(opt.get("max_disks", 3) or 3)
     disk_paths = opt.get("disk_paths") or []
     temp_limit = int(opt.get("max_temp_entries", 3) or 3)
@@ -205,10 +268,14 @@ def collect(options: dict[str, Any] | None = None) -> dict[str, Any]:
         "ok": psutil is not None,
         "collected_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "sample_interval": interval,
+        "plugin_version": str(opt.get("plugin_version") or PLUGIN_VERSION),
+        "astrbot_version": str(opt.get("astrbot_version") or _astrbot_version_cached()),
     }
 
-    # ---- CPU ----
-    cpu_total, per_core = _sample_cpu(interval) if show_per_core or True else (None, [])
+    # ---- CPU + 网络速率（共用同一次采样窗口）----
+    # 采样时长为 0 时拿不到有意义的速率，直接跳过
+    sample = _sample(interval, with_net_speed=show_net and show_net_speed and interval > 0)
+    cpu_total, per_core = sample["cpu_total"], sample["per_core"]
     cores_physical = safe(lambda: psutil.cpu_count(logical=False), None)
     cores_logical = safe(lambda: psutil.cpu_count(logical=True), None)
     freq = safe(lambda: psutil.cpu_freq(), None)
@@ -282,12 +349,18 @@ def collect(options: dict[str, Any] | None = None) -> dict[str, Any]:
     data["disk"] = disks
 
     # ---- 网络 ----
+    # sent/recv 是自开机起的累计总流量；up_speed/down_speed 是采样窗口内的实时速率
     net = None
     if show_net:
         counters = safe(lambda: psutil.net_io_counters(), None)
         net = {
             "sent": getattr(counters, "bytes_sent", None) if counters else None,
             "recv": getattr(counters, "bytes_recv", None) if counters else None,
+            "packets_sent": getattr(counters, "packets_sent", None) if counters else None,
+            "packets_recv": getattr(counters, "packets_recv", None) if counters else None,
+            "up_speed": sample.get("up_speed"),
+            "down_speed": sample.get("down_speed"),
+            "window": sample.get("window"),
         }
     data["net"] = net
 
@@ -367,6 +440,12 @@ def render_concise(data: dict[str, Any]) -> str:
     else:
         lines.append(f"-存储：{NA} 占用 / {NA}")
 
+    net = data.get("net")
+    if net and (net.get("sent") is not None or net.get("recv") is not None):
+        lines.append(
+            f"-网络：总上传 {human_bytes(net.get('sent'))} / 总下载 {human_bytes(net.get('recv'))}"
+        )
+
     return "\n".join(lines)
 
 
@@ -436,7 +515,14 @@ def render_detailed(data: dict[str, Any]) -> str:
     net = data.get("net")
     if net and (net.get("sent") is not None or net.get("recv") is not None):
         lines.append("────────────────")
-        lines.append(f"网络  ↑ {human_bytes(net.get('sent'))}   ↓ {human_bytes(net.get('recv'))}")
+        lines.append(
+            f"网络  总上传 {human_bytes(net.get('sent'))}   总下载 {human_bytes(net.get('recv'))}"
+        )
+        if net.get("up_speed") is not None:
+            lines.append(
+                f"     实时 ↑ {human_bytes(net.get('up_speed'))}/s"
+                f"   ↓ {human_bytes(net.get('down_speed'))}/s"
+            )
 
     # 温度
     if data.get("temp"):
@@ -635,6 +721,8 @@ def render_report_image(options: dict[str, Any] | None = None, save_path: str | 
     T_MEM = L("内存", "Memory")
     T_DISK = L("存储", "Disk")
     T_NET = L("网络", "Network")
+    T_NET_TOTAL = L("累计流量", "Total Transfer")
+    T_NET_SPEED = L("实时速率", "Current Speed")
     T_TEMP = L("温度", "Temperature")
     T_HIDDEN = L("其余 {} 个核心已折叠", "{} more cores omitted")
 
@@ -694,7 +782,24 @@ def render_report_image(options: dict[str, Any] | None = None, save_path: str | 
     if data.get("net"):
         n = data["net"]
         add_row("section", text=T_NET)
-        add_row("meta", text=f"↑ {human_bytes(n.get('sent'))}   ↓ {human_bytes(n.get('recv'))}")
+        # 累计流量：自开机以来的总上传/总下载
+        add_row(
+            "meta",
+            text=(
+                f"{T_NET_TOTAL}  "
+                f"↑ {human_bytes(n.get('sent'))}   ↓ {human_bytes(n.get('recv'))}"
+            ),
+        )
+        # 实时速率：采样窗口内的瞬时速度
+        if n.get("up_speed") is not None or n.get("down_speed") is not None:
+            add_row(
+                "meta",
+                text=(
+                    f"{T_NET_SPEED}  "
+                    f"↑ {human_bytes(n.get('up_speed'))}/s   "
+                    f"↓ {human_bytes(n.get('down_speed'))}/s"
+                ),
+            )
     if data.get("temp"):
         add_row("section", text=T_TEMP)
         for chip, label, cur in data["temp"]:
@@ -756,7 +861,11 @@ def render_report_image(options: dict[str, Any] | None = None, save_path: str | 
 
     y += 6
     draw.line([x, y, W - PAD, y], fill=LINE, width=1)
-    draw.text((x, y + 10), "SysInfo · AstrBot Plugin", font=f_small, fill=SUB)
+    # 页脚：SysInfo 版本号 · AstrBot 版本号（取不到 AstrBot 版本时只显示前者）
+    pv = str(data.get("plugin_version") or PLUGIN_VERSION)
+    av = str(data.get("astrbot_version") or "").strip()
+    footer = f"SysInfo {pv} · AstrBot {av}" if av and av.lower() != "unknown" else f"SysInfo {pv}"
+    draw.text((x, y + 10), footer, font=f_small, fill=SUB)
 
     if save_path is None:
         import tempfile

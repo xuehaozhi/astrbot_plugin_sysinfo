@@ -73,6 +73,7 @@ pip install -r data/plugins/astrbot_plugin_sysinfo/requirements.txt
 ...
 -RAM：48.9% 使用（7.76 GB / 15.87 GB）
 -存储[C:\]：73.1% 占用（43.35 GB / 59.32 GB）
+-网络：总上传 291.32 MB / 总下载 3.59 GB
 ```
 
 配置 `report_style=detailed` 时（默认，带进度条和附加模块）：
@@ -87,7 +88,13 @@ CPU 总使用率    2.9%  ░░░░░░░░░░
   Core 1       3.1%  ░░░░░░░░░░
 RAM           47.0%  █████░░░░░  7.46 GB / 15.87 GB
 存储 C:\     73.1%  ███████░░░  43.34 GB / 59.32 GB
+────────────────
+网络  总上传 279.22 MB   总下载 3.54 GB
+     实时 ↑ 3.38 KB/s   ↓ 3.23 KB/s
 ```
+
+图片卡片底部会显示 `SysInfo <插件版本> · AstrBot <AstrBot 版本>`，方便排查"到底跑的是哪一版"。
+AstrBot 版本取不到时该段自动省略，不会显示 `unknown`。
 
 ---
 
@@ -168,6 +175,7 @@ WebUI → 插件 → 系统状态 → 配置，或直接编辑 `data/config/astr
 | `disk_paths` | list | `[]` | 指定监控的挂载点，留空自动检测。Linux 填 `/`，Windows 填 `C:\` |
 | `max_disks` | int | `3` | 最多显示多少分区 |
 | `show_net` | bool | `true` | 显示网络累计收发流量 |
+| `show_net_speed` | bool | `true` | 显示网络实时上下行速率（复用 CPU 采样窗口，不额外耗时） |
 | `show_temp` | bool | `true` | 显示温度（需硬件/系统支持，多数 Linux 可用） |
 | `max_temp_entries` | int | `3` | 最多显示几条温度数据 |
 | `show_top_process` | bool | `false` | 显示内存占用 Top 进程 |

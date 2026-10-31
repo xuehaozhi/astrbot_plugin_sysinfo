@@ -13,10 +13,22 @@ from astrbot.api.star import Context, Star, register
 
 # 兼容 AstrBot 以模块 / 文件路径两种方式加载本插件
 try:
-    from .sysinfo_core import build_report, collect, render_report_image, render_text
+    from .sysinfo_core import (
+        PLUGIN_VERSION,
+        build_report,
+        collect,
+        render_report_image,
+        render_text,
+    )
 except ImportError:  # pragma: no cover
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from sysinfo_core import build_report, collect, render_report_image, render_text
+    from sysinfo_core import (  # type: ignore[no-redef]
+        PLUGIN_VERSION,
+        build_report,
+        collect,
+        render_report_image,
+        render_text,
+    )
 
 # 兼容 LLM 工具注册：新版为 filter.llm_tool，旧版为独立的 llm_tool
 _llm_tool = getattr(filter, "llm_tool", None)
@@ -29,9 +41,9 @@ if _llm_tool is None:  # pragma: no cover - 旧版本 AstrBot
 
 @register(
     "astrbot_plugin_sysinfo",
-    "WorkBuddy",
+    "xuehaozhi",
     "读取服务器实时运行状态并输出：CPU 总使用率、每核心使用率、内存占用、磁盘存储等",
-    "1.0.0",
+    PLUGIN_VERSION,
 )
 class SysInfoPlugin(Star):
     def __init__(self, context: Context, config=None):
@@ -55,6 +67,7 @@ class SysInfoPlugin(Star):
             "disk_paths": self._opt("disk_paths", []),
             "max_disks": self._opt("max_disks", 3),
             "show_net": self._opt("show_net", True),
+            "show_net_speed": self._opt("show_net_speed", True),
             "show_temp": self._opt("show_temp", True),
             "max_temp_entries": self._opt("max_temp_entries", 3),
             "show_top_process": self._opt("show_top_process", False),
